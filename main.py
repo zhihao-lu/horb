@@ -1,4 +1,6 @@
 from ib_insync import *
+import datetime
+import math
 
 '''ib = IB()
 ib.connect(port=4002)
@@ -7,57 +9,93 @@ ib.qualifyContracts(a)
 d = ib.reqMktData(a, '221')
 ib.sleep(5)'''
 
+
 class Trade:
-    def __init__(self):
+    def __init__(self, port=4001):
         self.ib = IB()
-        self.ib.connect(port=4001)
+        self.ib.connect(port=port)
+        self.spx = Index('SPX', 'CBOE', 'USD')
+        self.ib.qualifyContracts(self.spx)
 
     def get_spx_first_candle(self):
-        spx = Stock('SPX', 'CBOE', 'USD')
-        self.ib.qualifyContracts(spx)
-        data = self.ib.reqHistoricalData(spx,
-                                    endDateTime='',
-                                    durationStr='480',
-                                    barSizeSetting='15 mins',
-                                    whatToShow='TRADES',
-                                    useRTH=True,
-                                    formatDate=1)
-        # list(filter(lambda x: x.date == datetime.datetime(2021, 11, 3, 21, 45), data))
-        #[BarData(date=datetime.datetime(2021, 11, 3, 21, 30), open=4630.65, high=4630.65, low=4621.74, close=4625.57, volume=0.0, average=0.0, barCount=875), BarData(date=datetime.datetime(2021, 11, 3, 21, 45), open=4626.04, high=4628.76, low=4624.72, close=4627.52, volume=0.0, average=0.0, barCount=864), BarData(date=datetime.datetime(2021, 11, 3, 22, 0), open=4627.4, high=4628.46, low=4621.18, close=4623.32, volume=0.0, average=0.0, barCount=627)]
-        max_price = data1.high
-        min_price = data1.low
-        print(max_price, min_price)
+        data = self.ib.reqHistoricalData(self.spx,
+                                         endDateTime='',
+                                         durationStr='960 S',
+                                         barSizeSetting='15 mins',
+                                         whatToShow='TRADES',
+                                         useRTH=True,
+                                         formatDate=1)
+        first_candle = list(filter(lambda x: x.date.minute == 30 and x.date.hour == 21, data))[0]
+        max_price = first_candle.high
+        min_price = first_candle.low
+        return max_price, min_price
 
-    def get_option_basket(self, high_strike, low_strike):
-        #strike date =
-        low = Option('SPX', '20211103', low_strike, 'P', 'SMART')
-        self.ib.qualifyContracts(low)
+    def get_option_basket(self, short_strike, long_strike, p_c):
+        strike_date = datetime.datetime.now().strftime('%Y%m%d')
+        long = Option('SPX', strike_date, long_strike, p_c, 'SMART')
+        self.ib.qualifyContracts(long)
 
-        high = Option('SPX', '20211103', high_strike, 'P', 'SMART')
-        self.ib.qualifyContracts(high)
+        short = Option('SPX', strike_date, short_strike, p_c, 'SMART')
+        self.ib.qualifyContracts(short)
 
         contract = Contract()
-        contract.symbol = low.symbol
+        contract.symbol = long.symbol
         contract.secType = 'BAG'
-        contract.currency = low.currency
-        contract.exchange = high.exchange
+        contract.currency = long.currency
+        contract.exchange = long.exchange
 
         leg1 = ComboLeg()
-        leg1.conId = low.conId
+        leg1.conId = long.conId
         leg1.ratio = 1
         leg1.action = 'BUY'
-        leg1.exchange = low.exchange
+        leg1.exchange = long.exchange
 
         leg2 = ComboLeg()
-        leg2.conId = high.conId
+        leg2.conId = short.conId
         leg2.ratio = 1
         leg2.action = 'SELL'
-        leg2.exchange = high.exchange
+        leg2.exchange = short.exchange
 
         contract.comboLegs = []
         contract.comboLegs.append(leg1)
         contract.comboLegs.append(leg2)
 
-        d = self.ib.reqMktData(contract) #, '221'
-        #self.ib.sleep(1)
-        #d.marketPrice()
+        return contract
+        # d = self.ib.reqMktData(contract)  # , '221'
+        # self.ib.sleep(1)
+        # d.marketPrice()
+
+    def create_order(self, max_price, min_price):
+        # if spx crosses high price in range
+        bull_price_condition = PriceCondition(
+            price=max_price,
+            conId=self.spx.conId,
+            exch=self.spx.exchange
+        )
+
+        bull_short_strike = (min_price//5)*5
+        bull_long_strike = bull_short_strike - 5
+
+        bull_contract = self.get_option_basket(bull_short_strike, bull_long_strike, 'P')
+
+
+        # if spx crosses low price in range
+        bull_price_condition = PriceCondition(
+            price=min_price,
+            conId=self.spx.conId,
+            exch=self.spx.exchange
+        )
+
+        bear_short_strike = (math.ceil(max_price/5))*5
+        bear_long_strike = bull_short_strike + 5
+
+        bear_contract = self.get_option_basket(bear_short_strike, bear_long_strike, 'C')
+
+
+
+        # append price condition to order
+        # wrap it in bracket to take profit
+        # put each bracket in oca to make sure each is ok
+        return bull_contract, bear_contract
+
+

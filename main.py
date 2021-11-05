@@ -98,4 +98,3 @@ class Trade:
         # put each bracket in oca to make sure each is ok
         return bull_contract, bear_contract
 
-
